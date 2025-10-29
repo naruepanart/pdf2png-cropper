@@ -15,23 +15,17 @@ import (
 )
 
 func main() {
-	// Parse command line arguments
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: ./pdf2png-cropper [page_number]")
-		fmt.Println("Example: ./pdf2png-cropper 5  (process only page 5)")
-		fmt.Println("Example: ./pdf2png-cropper    (process all pages)")
-		return
-	}
-
 	var specificPage int
 	var err error
 
-	// Check if the first argument is a number (page number)
+	// Check command line arguments
 	if len(os.Args) >= 2 {
+		// Try to parse the first argument as a page number
 		specificPage, err = strconv.Atoi(os.Args[1])
 		if err != nil {
 			fmt.Printf("Error: Invalid page number '%s'. Please provide a valid number.\n", os.Args[1])
 			fmt.Println("Usage: ./pdf2png-cropper [page_number]")
+			fmt.Println("If no page number is provided, all pages will be processed.")
 			return
 		}
 
@@ -42,6 +36,10 @@ func main() {
 		}
 
 		fmt.Printf("Will process only page %d\n", specificPage)
+	} else {
+		// No arguments provided, process all pages
+		specificPage = 0
+		fmt.Println("Will process all pages")
 	}
 
 	currentDir, err := os.Getwd()
@@ -85,11 +83,9 @@ func processPDF(pdfFile string, specificPage int) error {
 
 	totalPages := doc.NumPage()
 
-	// Adjust for 0-based indexing internally
-	targetPage := specificPage - 1
-
 	if specificPage > 0 {
 		// Process only the specified page
+		targetPage := specificPage - 1 // Adjust for 0-based indexing
 		if specificPage > totalPages {
 			return fmt.Errorf("page %d does not exist (PDF has only %d pages)", specificPage, totalPages)
 		}
