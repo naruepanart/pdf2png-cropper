@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"image/png"
 
@@ -14,6 +15,35 @@ import (
 )
 
 func main() {
+	// Parse command line arguments
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: ./pdf2png-cropper [page_number]")
+		fmt.Println("Example: ./pdf2png-cropper 5  (process only page 5)")
+		fmt.Println("Example: ./pdf2png-cropper    (process all pages)")
+		return
+	}
+
+	var specificPage int
+	var err error
+
+	// Check if the first argument is a number (page number)
+	if len(os.Args) >= 2 {
+		specificPage, err = strconv.Atoi(os.Args[1])
+		if err != nil {
+			fmt.Printf("Error: Invalid page number '%s'. Please provide a valid number.\n", os.Args[1])
+			fmt.Println("Usage: ./pdf2png-cropper [page_number]")
+			return
+		}
+
+		// Validate page number (1-based for user input)
+		if specificPage < 1 {
+			fmt.Printf("Error: Page number must be positive, got %d\n", specificPage)
+			return
+		}
+
+		fmt.Printf("Will process only page %d\n", specificPage)
+	}
+
 	currentDir, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
@@ -32,7 +62,7 @@ func main() {
 	fmt.Printf("Found %d PDF file(s) to process\n", len(pdfFiles))
 
 	for _, pdfFile := range pdfFiles {
-		if err := processPDF(pdfFile); err != nil {
+		if err := processPDF(pdfFile, specificPage); err != nil {
 			log.Printf("Error processing %s: %v", pdfFile, err)
 		}
 	}
@@ -40,7 +70,7 @@ func main() {
 	fmt.Println("All PDF files processed")
 }
 
-func processPDF(pdfFile string) error {
+func processPDF(pdfFile string, specificPage int) error {
 	doc, err := fitz.New(pdfFile)
 	if err != nil {
 		return err
@@ -55,11 +85,26 @@ func processPDF(pdfFile string) error {
 
 	totalPages := doc.NumPage()
 
-	fmt.Printf("Converting %d pages from %s\n", totalPages, pdfFile)
+	// Adjust for 0-based indexing internally
+	targetPage := specificPage - 1
 
-	for i := 0; i < totalPages; i++ {
-		if err := convertPage(doc, i, baseName); err != nil {
-			log.Printf("Error converting page %d: %v", i+1, err)
+	if specificPage > 0 {
+		// Process only the specified page
+		if specificPage > totalPages {
+			return fmt.Errorf("page %d does not exist (PDF has only %d pages)", specificPage, totalPages)
+		}
+
+		fmt.Printf("Converting page %d from %s\n", specificPage, pdfFile)
+		if err := convertPage(doc, targetPage, baseName); err != nil {
+			return fmt.Errorf("error converting page %d: %v", specificPage, err)
+		}
+	} else {
+		// Process all pages
+		fmt.Printf("Converting all %d pages from %s\n", totalPages, pdfFile)
+		for i := 0; i < totalPages; i++ {
+			if err := convertPage(doc, i, baseName); err != nil {
+				log.Printf("Error converting page %d: %v", i+1, err)
+			}
 		}
 	}
 
