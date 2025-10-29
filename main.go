@@ -12,103 +12,123 @@ import (
 )
 
 func main() {
-	// Input PDF file
-	inputPDF := "input.pdf"
-	
-	// Output directory for images
-	outputDir := "output"
-
-	// Create output directory if it doesn't exist
-	err := os.MkdirAll(outputDir, 0755)
+	currentDir, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Open PDF document
-	doc, err := fitz.New(inputPDF)
+	pdfFiles, err := filepath.Glob(filepath.Join(currentDir, "*.pdf"))
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if len(pdfFiles) == 0 {
+		fmt.Println("No PDF files found in the current directory")
+		return
+	}
+
+	fmt.Printf("Found %d PDF file(s) to process\n", len(pdfFiles))
+
+	for _, pdfFile := range pdfFiles {
+		if err := processPDF(pdfFile); err != nil {
+			log.Printf("Error processing %s: %v", pdfFile, err)
+		}
+	}
+
+	fmt.Println("All PDF files processed!")
+}
+
+func processPDF(pdfFile string) error {
+	doc, err := fitz.New(pdfFile)
+	if err != nil {
+		return err
 	}
 	defer doc.Close()
 
-	// Get number of pages
-	totalPages := doc.NumPage()
-	fmt.Printf("Converting %d pages from %s\n", totalPages, inputPDF)
-
-	// Convert each page to image
-	for i := 0; i < totalPages; i++ {
-		// Render page to image with 300 DPI
-		img, err := doc.Image(i)
-		if err != nil {
-			log.Printf("Error rendering page %d: %v", i+1, err)
-			continue
-		}
-
-		// Crop image to 4:3 aspect ratio
-		croppedImg := cropTo4x3(img)
-
-		// Create output file
-		outputFile := filepath.Join(outputDir, fmt.Sprintf("page_%03d.png", i+1))
-		file, err := os.Create(outputFile)
-		if err != nil {
-			log.Printf("Error creating file for page %d: %v", i+1, err)
-			continue
-		}
-
-		// Save as PNG
-		err = png.Encode(file, croppedImg)
-		file.Close()
-
-		if err != nil {
-			log.Printf("Error saving page %d: %v", i+1, err)
-			continue
-		}
-
-		fmt.Printf("Converted page %d/%d\n", i+1, totalPages)
+	baseName := filepath.Base(pdfFile[:len(pdfFile)-len(filepath.Ext(pdfFile))])
+	
+	if err := os.MkdirAll(baseName, 0755); err != nil {
+		return err
 	}
 
-	fmt.Printf("Conversion complete! Images saved to %s/\n", outputDir)
+	totalPages := doc.NumPage()
+	fmt.Printf("Converting %d pages from %s\n", totalPages, pdfFile)
+
+	for i := 0; i < totalPages; i++ {
+		if err := convertPage(doc, i, baseName); err != nil {
+			log.Printf("Error converting page %d: %v", i+1, err)
+		}
+	}
+
+	fmt.Printf("Conversion complete for %s! Images saved to %s/\n", pdfFile, baseName)
+	return nil
 }
 
-// cropTo4x3 crops an image to 4:3 aspect ratio from the center
-func cropTo4x3(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Calculate target dimensions for 4:3 aspect ratio
-	var targetWidth, targetHeight int
-
-	// Determine whether to use width or height as the limiting dimension
-	if float64(width)/float64(height) > 4.0/3.0 {
-		// Image is wider than 4:3, so use height as reference
-		targetHeight = height
-		targetWidth = height * 4 / 3
-	} else {
-		// Image is taller than 4:3, so use width as reference
-		targetWidth = width
-		targetHeight = width * 3 / 4
+func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
+	img, err := doc.Image(pageNum)
+	if err != nil {
+		return fmt.Errorf("render page: %w", err)
 	}
 
-	// Calculate crop coordinates to center the crop
-	x0 := (width - targetWidth) / 2
-	y0 := (height - targetHeight) / 2
-	x1 := x0 + targetWidth
-	y1 := y0 + targetHeight
+	croppedImg := cropTo4x3(img)
+	outputFile := filepath.Join(baseName, fmt.Sprintf("%s_page_%03d.png", baseName, pageNum+1))
+	
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer file.Close()
 
-	// Ensure coordinates are within bounds
-	if x0 < 0 { x0 = 0 }
-	if y0 < 0 { y0 = 0 }
-	if x1 > width { x1 = width }
-	if y1 > height { y1 = height }
+	if err := png.Encode(file, croppedImg); err != nil {
+		return fmt.Errorf("encode PNG: %w", err)
+	}
 
-	// Perform the crop
-	cropped := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	fmt.Printf("Converted page %d/%d\n", pageNum+1, doc.NumPage())
+	return nil
+}
+
+func cropTo4x3(img image.Image) image.Image {
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+
+	targetWidth, targetHeight := calculateCropDimensions(width, height)
+	x0, y0 := (width-targetWidth)/2, (height-targetHeight)/2
+	x1, y1 := x0+targetWidth, y0+targetHeight
+
+	// Ensure bounds
+	x0, y0 = max(x0, 0), max(y0, 0)
+	x1, y1 = min(x1, width), min(y1, height)
+
+	return cropImage(img, x0, y0, x1, y1)
+}
+
+func calculateCropDimensions(width, height int) (targetWidth, targetHeight int) {
+	if float64(width)/float64(height) > 4.0/3.0 {
+		return height * 4 / 3, height
+	}
+	return width, width * 3 / 4
+}
+
+func cropImage(img image.Image, x0, y0, x1, y1 int) image.Image {
+	cropped := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {
 			cropped.Set(x-x0, y-y0, img.At(x, y))
 		}
 	}
-
 	return cropped
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
