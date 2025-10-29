@@ -1,2 +1,3 @@
 # pdf2png-cropper
-pdf2png-cropper
+
+go build -ldflags="-s -w" .
