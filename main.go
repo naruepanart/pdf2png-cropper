@@ -14,58 +14,60 @@ import (
 	"golang.org/x/image/draw"
 )
 
+const (
+	targetWidth  = 1440
+	targetHeight = 1080
+	aspectRatio  = 4.0 / 3.0
+)
+
 func main() {
-	var specificPage int
-	var err error
+	specificPage := parseArgs()
 
-	// Check command line arguments
-	if len(os.Args) >= 2 {
-		// Try to parse the first argument as a page number
-		specificPage, err = strconv.Atoi(os.Args[1])
-		if err != nil {
-			fmt.Printf("Error: Invalid page number '%s'. Please provide a valid number.\n", os.Args[1])
-			fmt.Println("Usage: ./pdf2png-cropper [page_number]")
-			fmt.Println("If no page number is provided, all pages will be processed.")
-			return
-		}
-
-		// Validate page number (1-based for user input)
-		if specificPage < 1 {
-			fmt.Printf("Error: Page number must be positive, got %d\n", specificPage)
-			return
-		}
-
-		fmt.Printf("Will process only page %d\n", specificPage)
-	} else {
-		// No arguments provided, process all pages
-		specificPage = 0
-		fmt.Println("Will process all pages")
-	}
-
-	currentDir, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	pdfFiles, err := filepath.Glob(filepath.Join(currentDir, "*.pdf"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	pdfFiles := findPDFs()
 	if len(pdfFiles) == 0 {
-		fmt.Println("No PDF files found in the current directory")
+		fmt.Println("No PDF files found in current directory")
 		return
 	}
 
-	fmt.Printf("Found %d PDF file(s) to process\n", len(pdfFiles))
+	processFiles(pdfFiles, specificPage)
+	fmt.Println("All PDF files processed")
+}
 
-	for _, pdfFile := range pdfFiles {
-		if err := processPDF(pdfFile, specificPage); err != nil {
-			log.Printf("Error processing %s: %v", pdfFile, err)
-		}
+func parseArgs() int {
+	if len(os.Args) < 2 {
+		fmt.Println("Processing all pages")
+		return 0
 	}
 
-	fmt.Println("All PDF files processed")
+	page, err := strconv.Atoi(os.Args[1])
+	if err != nil || page < 1 {
+		log.Fatalf("Error: Invalid page number '%s'. Must be a positive integer.", os.Args[1])
+	}
+
+	fmt.Printf("Processing only page %d\n", page)
+	return page
+}
+
+func findPDFs() []string {
+	dir, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.pdf"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return files
+}
+
+func processFiles(pdfFiles []string, specificPage int) {
+	for _, file := range pdfFiles {
+		if err := processPDF(file, specificPage); err != nil {
+			log.Printf("Error processing %s: %v", file, err)
+		}
+	}
 }
 
 func processPDF(pdfFile string, specificPage int) error {
@@ -76,36 +78,39 @@ func processPDF(pdfFile string, specificPage int) error {
 	defer doc.Close()
 
 	baseName := filepath.Base(pdfFile[:len(pdfFile)-len(filepath.Ext(pdfFile))])
-
 	if err := os.MkdirAll(baseName, 0755); err != nil {
 		return err
 	}
 
 	totalPages := doc.NumPage()
+	pagesToProcess := getPagesToProcess(specificPage, totalPages)
 
-	if specificPage > 0 {
-		// Process only the specified page
-		targetPage := specificPage - 1 // Adjust for 0-based indexing
-		if specificPage > totalPages {
-			return fmt.Errorf("page %d does not exist (PDF has only %d pages)", specificPage, totalPages)
-		}
+	fmt.Printf("Converting %d pages from %s\n", len(pagesToProcess), pdfFile)
 
-		fmt.Printf("Converting page %d from %s\n", specificPage, pdfFile)
-		if err := convertPage(doc, targetPage, baseName); err != nil {
-			return fmt.Errorf("error converting page %d: %v", specificPage, err)
-		}
-	} else {
-		// Process all pages
-		fmt.Printf("Converting all %d pages from %s\n", totalPages, pdfFile)
-		for i := 0; i < totalPages; i++ {
-			if err := convertPage(doc, i, baseName); err != nil {
-				log.Printf("Error converting page %d: %v", i+1, err)
-			}
+	for _, pageNum := range pagesToProcess {
+		if err := convertPage(doc, pageNum, baseName); err != nil {
+			log.Printf("Error converting page %d: %v", pageNum+1, err)
 		}
 	}
 
 	fmt.Printf("Conversion complete for %s! Images saved to %s/\n", pdfFile, baseName)
 	return nil
+}
+
+func getPagesToProcess(specificPage, totalPages int) []int {
+	if specificPage > 0 {
+		if specificPage > totalPages {
+			log.Printf("Page %d does not exist (PDF has only %d pages)", specificPage, totalPages)
+			return nil
+		}
+		return []int{specificPage - 1}
+	}
+
+	pages := make([]int, totalPages)
+	for i := 0; i < totalPages; i++ {
+		pages[i] = i
+	}
+	return pages
 }
 
 func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
@@ -114,79 +119,69 @@ func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
 		return fmt.Errorf("render page: %w", err)
 	}
 
-	croppedImg := cropTo4x3(img)
-	resizedImg := resizeTo1440x1080(croppedImg)
+	// Use high-quality CatmullRom scaler for better image quality
+	cropped := cropToAspect(img, aspectRatio)
+	resized := resizeImage(cropped, targetWidth, targetHeight)
 
 	outputFile := filepath.Join(baseName, fmt.Sprintf("page_%03d.png", pageNum+1))
-
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return fmt.Errorf("create file: %w", err)
-	}
-	defer file.Close()
-
-	if err := png.Encode(file, resizedImg); err != nil {
-		return fmt.Errorf("encode PNG: %w", err)
+	if err := savePNG(resized, outputFile); err != nil {
+		return fmt.Errorf("save image: %w", err)
 	}
 
 	fmt.Printf("Converted page %d/%d\n", pageNum+1, doc.NumPage())
 	return nil
 }
 
-func cropTo4x3(img image.Image) image.Image {
+func cropToAspect(img image.Image, ratio float64) image.Image {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
-	targetWidth, targetHeight := calculateCropDimensions(width, height)
-	x0, y0 := (width-targetWidth)/2, (height-targetHeight)/2
-	x1, y1 := x0+targetWidth, y0+targetHeight
+	targetWidth, targetHeight := calculateCropDimensions(width, height, ratio)
 
-	// Ensure bounds
-	x0, y0 = max(x0, 0), max(y0, 0)
-	x1, y1 = min(x1, width), min(y1, height)
+	x0 := (width - targetWidth) / 2
+	y0 := (height - targetHeight) / 2
+	x1 := x0 + targetWidth
+	y1 := y0 + targetHeight
 
-	return cropImage(img, x0, y0, x1, y1)
+	// Ensure bounds are within image
+	x0 = max(x0, 0)
+	y0 = max(y0, 0)
+	x1 = min(x1, width)
+	y1 = min(y1, height)
+
+	return img.(interface {
+		SubImage(r image.Rectangle) image.Image
+	}).SubImage(image.Rect(x0, y0, x1, y1))
 }
 
-func calculateCropDimensions(width, height int) (targetWidth, targetHeight int) {
-	// Use exact 4:3 ratio calculation
-	desiredRatio := 4.0 / 3.0
+func calculateCropDimensions(width, height int, ratio float64) (int, int) {
 	currentRatio := float64(width) / float64(height)
 
-	if currentRatio > desiredRatio {
-		// Image is wider than 4:3, crop width
-		targetHeight = height
-		targetWidth = int(float64(height) * desiredRatio)
-	} else {
-		// Image is taller than 4:3, crop height
-		targetWidth = width
-		targetHeight = int(float64(width) / desiredRatio)
+	if currentRatio > ratio {
+		// Image is wider than target ratio, crop width
+		return int(float64(height) * ratio), height
 	}
-	return targetWidth, targetHeight
+	// Image is taller than target ratio, crop height
+	return width, int(float64(width) / ratio)
 }
 
-func cropImage(img image.Image, x0, y0, x1, y1 int) image.Image {
-	cropped := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
-	for y := y0; y < y1; y++ {
-		for x := x0; x < x1; x++ {
-			cropped.Set(x-x0, y-y0, img.At(x, y))
-		}
-	}
-	return cropped
-}
+func resizeImage(img image.Image, width, height int) image.Image {
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 
-func resizeTo1440x1080(img image.Image) image.Image {
-	// Force exact 1440x1080 output
-	targetWidth := 1440
-	targetHeight := 1080
-
-	// Create destination image
-	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
-
-	// Use high-quality scaler
-	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	// Use CatmullRom for higher quality scaling (better than ApproxBiLinear)
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
 
 	return dst
+}
+
+func savePNG(img image.Image, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return png.Encode(file, img)
 }
 
 func max(a, b int) int {
