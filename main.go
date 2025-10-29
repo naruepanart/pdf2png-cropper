@@ -7,8 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gen2brain/go-fitz"
 	"image/png"
+
+	"github.com/gen2brain/go-fitz"
 )
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 		}
 	}
 
-	fmt.Println("All PDF files processed!")
+	fmt.Println("All PDF files processed")
 }
 
 func processPDF(pdfFile string) error {
@@ -46,12 +47,13 @@ func processPDF(pdfFile string) error {
 	defer doc.Close()
 
 	baseName := filepath.Base(pdfFile[:len(pdfFile)-len(filepath.Ext(pdfFile))])
-	
+
 	if err := os.MkdirAll(baseName, 0755); err != nil {
 		return err
 	}
 
 	totalPages := doc.NumPage()
+
 	fmt.Printf("Converting %d pages from %s\n", totalPages, pdfFile)
 
 	for i := 0; i < totalPages; i++ {
@@ -71,8 +73,8 @@ func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
 	}
 
 	croppedImg := cropTo4x3(img)
-	outputFile := filepath.Join(baseName, fmt.Sprintf("%s_page_%03d.png", baseName, pageNum+1))
-	
+	outputFile := filepath.Join(baseName, fmt.Sprintf("page_%03d.png", pageNum+1))
+
 	file, err := os.Create(outputFile)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
