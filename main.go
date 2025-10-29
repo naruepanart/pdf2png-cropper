@@ -10,6 +10,7 @@ import (
 	"image/png"
 
 	"github.com/gen2brain/go-fitz"
+	"golang.org/x/image/draw"
 )
 
 func main() {
@@ -73,6 +74,8 @@ func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
 	}
 
 	croppedImg := cropTo4x3(img)
+	resizedImg := resizeTo1440x1080(croppedImg)
+
 	outputFile := filepath.Join(baseName, fmt.Sprintf("page_%03d.png", pageNum+1))
 
 	file, err := os.Create(outputFile)
@@ -81,7 +84,7 @@ func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
 	}
 	defer file.Close()
 
-	if err := png.Encode(file, croppedImg); err != nil {
+	if err := png.Encode(file, resizedImg); err != nil {
 		return fmt.Errorf("encode PNG: %w", err)
 	}
 
@@ -105,10 +108,20 @@ func cropTo4x3(img image.Image) image.Image {
 }
 
 func calculateCropDimensions(width, height int) (targetWidth, targetHeight int) {
-	if float64(width)/float64(height) > 4.0/3.0 {
-		return height * 4 / 3, height
+	// Use exact 4:3 ratio calculation
+	desiredRatio := 4.0 / 3.0
+	currentRatio := float64(width) / float64(height)
+
+	if currentRatio > desiredRatio {
+		// Image is wider than 4:3, crop width
+		targetHeight = height
+		targetWidth = int(float64(height) * desiredRatio)
+	} else {
+		// Image is taller than 4:3, crop height
+		targetWidth = width
+		targetHeight = int(float64(width) / desiredRatio)
 	}
-	return width, width * 3 / 4
+	return targetWidth, targetHeight
 }
 
 func cropImage(img image.Image, x0, y0, x1, y1 int) image.Image {
@@ -119,6 +132,20 @@ func cropImage(img image.Image, x0, y0, x1, y1 int) image.Image {
 		}
 	}
 	return cropped
+}
+
+func resizeTo1440x1080(img image.Image) image.Image {
+	// Force exact 1440x1080 output
+	targetWidth := 1440
+	targetHeight := 1080
+
+	// Create destination image
+	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+
+	// Use high-quality scaler
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+
+	return dst
 }
 
 func max(a, b int) int {
