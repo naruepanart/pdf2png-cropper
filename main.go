@@ -21,71 +21,87 @@ const (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	specificPage := parseArgs()
 
-	pdfFiles := findPDFs()
-	if len(pdfFiles) == 0 {
-		fmt.Println("No PDF files found in current directory")
-		return
+	pdfFiles, err := findPDFs()
+	if err != nil {
+		return fmt.Errorf("finding PDFs: %w", err)
 	}
 
-	processFiles(pdfFiles, specificPage)
-	fmt.Println("All PDF files processed")
+	if len(pdfFiles) == 0 {
+		fmt.Println("No PDF files found in current directory")
+		return nil
+	}
+
+	return processFiles(pdfFiles, specificPage)
 }
 
 func parseArgs() int {
 	if len(os.Args) < 2 {
-		fmt.Println("Processing all pages")
 		return 0
 	}
 
 	page, err := strconv.Atoi(os.Args[1])
 	if err != nil || page < 1 {
-		log.Fatalf("Error: Invalid page number '%s'. Must be a positive integer.", os.Args[1])
+		log.Printf("Warning: Invalid page number '%s', processing all pages", os.Args[1])
+		return 0
 	}
 
 	fmt.Printf("Processing only page %d\n", page)
 	return page
 }
 
-func findPDFs() []string {
-	dir, err := os.Getwd()
+func findPDFs() ([]string, error) {
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	files, err := filepath.Glob(filepath.Join(dir, "*.pdf"))
-	if err != nil {
-		log.Fatal(err)
+	var pdfFiles []string
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".pdf" {
+			pdfFiles = append(pdfFiles, entry.Name())
+		}
 	}
 
-	return files
+	return pdfFiles, nil
 }
 
-func processFiles(pdfFiles []string, specificPage int) {
+func processFiles(pdfFiles []string, specificPage int) error {
 	for _, file := range pdfFiles {
 		if err := processPDF(file, specificPage); err != nil {
 			log.Printf("Error processing %s: %v", file, err)
 		}
 	}
+	return nil
 }
 
 func processPDF(pdfFile string, specificPage int) error {
 	doc, err := fitz.New(pdfFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening PDF: %w", err)
 	}
 	defer doc.Close()
 
 	baseName := filepath.Base(pdfFile[:len(pdfFile)-len(filepath.Ext(pdfFile))])
 	if err := os.MkdirAll(baseName, 0755); err != nil {
-		return err
+		return fmt.Errorf("creating directory: %w", err)
 	}
 
 	totalPages := doc.NumPage()
 	pagesToProcess := getPagesToProcess(specificPage, totalPages)
 
-	fmt.Printf("Converting %d pages from %s\n", len(pagesToProcess), pdfFile)
+	if len(pagesToProcess) == 0 {
+		return nil
+	}
+
+	fmt.Printf("Converting %s (%d pages)\n", pdfFile, len(pagesToProcess))
 
 	for _, pageNum := range pagesToProcess {
 		if err := convertPage(doc, pageNum, baseName); err != nil {
@@ -93,7 +109,6 @@ func processPDF(pdfFile string, specificPage int) error {
 		}
 	}
 
-	fmt.Printf("Conversion complete for %s! Images saved to %s/\n", pdfFile, baseName)
 	return nil
 }
 
@@ -107,7 +122,7 @@ func getPagesToProcess(specificPage, totalPages int) []int {
 	}
 
 	pages := make([]int, totalPages)
-	for i := 0; i < totalPages; i++ {
+	for i := range totalPages {
 		pages[i] = i
 	}
 	return pages
@@ -116,19 +131,17 @@ func getPagesToProcess(specificPage, totalPages int) []int {
 func convertPage(doc *fitz.Document, pageNum int, baseName string) error {
 	img, err := doc.Image(pageNum)
 	if err != nil {
-		return fmt.Errorf("render page: %w", err)
+		return fmt.Errorf("rendering page: %w", err)
 	}
 
-	// Use high-quality CatmullRom scaler for better image quality
 	cropped := cropToAspect(img, aspectRatio)
 	resized := resizeImage(cropped, targetWidth, targetHeight)
 
 	outputFile := filepath.Join(baseName, fmt.Sprintf("page_%03d.png", pageNum+1))
 	if err := savePNG(resized, outputFile); err != nil {
-		return fmt.Errorf("save image: %w", err)
+		return fmt.Errorf("saving image: %w", err)
 	}
 
-	fmt.Printf("Converted page %d/%d\n", pageNum+1, doc.NumPage())
 	return nil
 }
 
@@ -140,14 +153,24 @@ func cropToAspect(img image.Image, ratio float64) image.Image {
 
 	x0 := (width - targetWidth) / 2
 	y0 := (height - targetHeight) / 2
+
+	// Ensure bounds are within image
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+
 	x1 := x0 + targetWidth
 	y1 := y0 + targetHeight
 
-	// Ensure bounds are within image
-	x0 = max(x0, 0)
-	y0 = max(y0, 0)
-	x1 = min(x1, width)
-	y1 = min(y1, height)
+	if x1 > width {
+		x1 = width
+	}
+	if y1 > height {
+		y1 = height
+	}
 
 	return img.(interface {
 		SubImage(r image.Rectangle) image.Image
@@ -167,10 +190,7 @@ func calculateCropDimensions(width, height int, ratio float64) (int, int) {
 
 func resizeImage(img image.Image, width, height int) image.Image {
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
-
-	// Use CatmullRom for higher quality scaling (better than ApproxBiLinear)
 	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
-
 	return dst
 }
 
@@ -182,18 +202,4 @@ func savePNG(img image.Image, filename string) error {
 	defer file.Close()
 
 	return png.Encode(file, img)
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
